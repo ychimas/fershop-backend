@@ -1,0 +1,372 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. Usuarios y Seguridad (Auth Service)
+// ==========================================
+
+enum Role {
+  ADMIN
+  MANAGER
+  AGENT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  role         Role     @default(AGENT)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  refreshTokens RefreshToken[]
+  quotes        Quote[]        @relation("QuoteCreatedBy")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// ==========================================
+// 2. CRM (Clientes)
+// ==========================================
+
+enum ClientStatus {
+  NEW
+  ACTIVE
+  INACTIVE
+}
+
+model Client {
+  id        String       @id @default(cuid())
+  name      String
+  email     String?      @unique
+  phone     String?
+  city      String?
+  address   String?
+  status    ClientStatus @default(NEW)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  orders Order[]
+  quotes Quote[]
+  sales  Sale[]
+}
+
+// ==========================================
+// 3. Catálogo (Productos)
+// ==========================================
+
+enum ProductCategory {
+  TECHNOLOGY
+  ACCESSORIES
+  FOOTWEAR
+  CLOTHING
+  OTHER
+}
+
+model Product {
+  id          String          @id @default(cuid())
+  name        String
+  category    ProductCategory @default(OTHER)
+  description String?
+  stock       Int             @default(0)
+  priceUsd    Decimal?        @db.Decimal(18, 2)
+  priceCop    Decimal?        @db.Decimal(18, 2)
+  imageUrl    String?         @db.LongText
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  orderItems OrderItem[]
+  saleItems  SaleItem[]
+}
+
+// ==========================================
+// 4. Cotizaciones (Pricing / Calculadora)
+// ==========================================
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+}
+
+enum ExtraItemOp {
+  ADD
+  SUBTRACT
+}
+
+model Quote {
+  id     String      @id @default(cuid())
+  status QuoteStatus @default(DRAFT)
+
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("QuoteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  currency String  @default("COP")
+  note     String?
+
+  // --- Inputs (exactos de la calculadora) ---
+  precioUsdNeto        Decimal? @db.Decimal(18, 2)
+  taxUsaPercent        Decimal? @db.Decimal(9, 4)
+  envioCasilleroUsd    Decimal? @db.Decimal(18, 2)
+  trmCopPorUsd         Decimal? @db.Decimal(18, 6)
+  costosLocalesCop     Decimal? @db.Decimal(18, 2)
+  margenDeseadoPercent Decimal? @db.Decimal(9, 4)
+  precioVentaMode      String? // "auto" | "manual"
+  precioVentaCopManual Decimal? @db.Decimal(18, 2)
+  anticipoMode         String? // "percent" | "amount"
+  anticipoPercentInput Decimal? @db.Decimal(9, 4)
+  anticipoCopInput     Decimal? @db.Decimal(18, 2)
+
+  // --- Outputs (snapshot calculado) ---
+  precioConTaxUsd                Decimal? @db.Decimal(18, 2)
+  extrasUsd                      Decimal? @db.Decimal(18, 2)
+  costoTotalUsd                  Decimal? @db.Decimal(18, 2)
+  costoEnCop                     Decimal? @db.Decimal(18, 2)
+  costoRealTotalCop              Decimal? @db.Decimal(18, 2)
+  precioVentaCopAuto             Decimal? @db.Decimal(18, 2)
+  precioVentaCop                 Decimal? @db.Decimal(18, 2)
+  gananciaCop                    Decimal? @db.Decimal(18, 2)
+  margenRealSobreVentaPercent    Decimal? @db.Decimal(9, 4)
+  anticipoPercent                Decimal? @db.Decimal(9, 4)
+  anticipoCop                    Decimal? @db.Decimal(18, 2)
+  saldoCop                       Decimal? @db.Decimal(18, 2)
+  capitalPropioCop               Decimal? @db.Decimal(18, 2)
+  percentCapitalPropioSobreCosto Decimal? @db.Decimal(9, 4)
+  markupSobreCostoPercent        Decimal? @db.Decimal(9, 4)
+  roiSobreMiCapitalPercent       Decimal? @db.Decimal(9, 4)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  extraItems QuoteExtraItem[]
+  order      Order?
+
+  @@index([clientId])
+  @@index([createdById])
+}
+
+model QuoteExtraItem {
+  id        String      @id @default(cuid())
+  quoteId   String
+  quote     Quote       @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  name      String?
+  op        ExtraItemOp @default(ADD)
+  amountUsd Decimal?    @db.Decimal(18, 2)
+  createdAt DateTime    @default(now())
+
+  @@index([quoteId])
+}
+
+// ==========================================
+// 5. Pedidos (Orders Service)
+// ==========================================
+
+enum OrderStatus {
+  QUOTED
+  PURCHASED
+  IN_TRANSIT
+  IN_CUSTOMS
+  IN_COLOMBIA
+  DELIVERED
+  CANCELLED
+}
+
+model Order {
+  id     String      @id @default(cuid())
+  code   String      @unique
+  status OrderStatus @default(QUOTED)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  quoteId String? @unique
+  quote   Quote?  @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+
+  totalUsd Decimal? @db.Decimal(18, 2)
+  totalCop Decimal? @db.Decimal(18, 2)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    OrderItem[]
+  purchase Purchase?
+  shipment Shipment?
+  delivery Delivery?
+  sale     Sale?
+
+  @@index([clientId])
+}
+
+model OrderItem {
+  id        String   @id @default(cuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  name     String
+  quantity Int      @default(1)
+  unitUsd  Decimal? @db.Decimal(18, 2)
+  unitCop  Decimal? @db.Decimal(18, 2)
+  totalUsd Decimal? @db.Decimal(18, 2)
+  totalCop Decimal? @db.Decimal(18, 2)
+
+  @@index([orderId])
+  @@index([productId])
+}
+
+// ==========================================
+// 6. Compras (Purchases Service)
+// ==========================================
+
+model Purchase {
+  id          String   @id @default(cuid())
+  orderId     String   @unique
+  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  storeName   String
+  trackingUS  String?
+  amountUsd   Decimal? @db.Decimal(18, 2)
+  purchasedAt DateTime @default(now())
+}
+
+// ==========================================
+// 7. Envíos y Entregas (Shipments Service)
+// ==========================================
+
+model Shipment {
+  id      String @id @default(cuid())
+  orderId String @unique
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  origin        String   @default("Miami, FL")
+  destination   String
+  packagesCount Int      @default(1)
+  weightLb      Decimal? @db.Decimal(10, 2)
+
+  courier      String?
+  trackingIntl String?
+
+  shippedAt        DateTime  @default(now())
+  estimatedArrival DateTime?
+  progressPercent  Int       @default(0)
+}
+
+model Delivery {
+  id            String    @id @default(cuid())
+  orderId       String    @unique
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  localCourier  String?
+  trackingLocal String?
+  deliveredAt   DateTime?
+}
+
+// ==========================================
+// 8. Ventas (Sales Service)
+// ==========================================
+
+enum PaymentMethod {
+  TRANSFER
+  CASH
+  NEQUI
+  DAVIPLATA
+  CARD
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model Sale {
+  id      String  @id @default(cuid())
+  orderId String? @unique
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  clientId String
+  client   Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  totalCop Decimal       @db.Decimal(18, 2)
+  paidCop  Decimal       @default(0) @db.Decimal(18, 2)
+  status   PaymentStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items    SaleItem[]
+  payments Payment[]
+
+  @@index([clientId])
+}
+
+model SaleItem {
+  id     String @id @default(cuid())
+  saleId String
+  sale   Sale   @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  name     String
+  quantity Int     @default(1)
+  unitCop  Decimal @db.Decimal(18, 2)
+  totalCop Decimal @db.Decimal(18, 2)
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model Payment {
+  id        String        @id @default(cuid())
+  saleId    String
+  sale      Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  method    PaymentMethod @default(OTHER)
+  amountCop Decimal       @db.Decimal(18, 2)
+  note      String?
+  paidAt    DateTime      @default(now())
+
+  @@index([saleId])
+}
+
+// ==========================================
+// 9. Configuración y TRM
+// ==========================================
+
+model ExchangeRate {
+  id       String   @id @default(cuid())
+  pair     String   @default("USD/COP")
+  rate     Decimal  @db.Decimal(18, 6)
+  source   String?
+  asOfDate DateTime @default(now())
+
+  @@index([asOfDate])
+}
+
+model Setting {
+  key       String   @id
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+}
