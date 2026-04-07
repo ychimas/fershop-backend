@@ -94,6 +94,7 @@ model Product {
 
   orderItems OrderItem[]
   saleItems  SaleItem[]
+  quoteItems QuoteItem[]
 }
 
 // ==========================================
@@ -160,10 +161,28 @@ model Quote {
   updatedAt DateTime @updatedAt
 
   extraItems QuoteExtraItem[]
+  items      QuoteItem[]
   order      Order?
 
   @@index([clientId])
   @@index([createdById])
+}
+
+model QuoteItem {
+  id      String @id @default(cuid())
+  quoteId String
+  quote   Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  name     String
+  quantity Int     @default(1)
+  unitCop  Decimal @db.Decimal(18, 2)
+  totalCop Decimal @db.Decimal(18, 2)
+
+  @@index([quoteId])
+  @@index([productId])
 }
 
 model QuoteExtraItem {
